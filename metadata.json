@@ -1,0 +1,6 @@
+{
+  "name": "射的企画論 オーディオプレイヤー",
+  "description": "「射的行ってみてください」の音楽と歌詞を同期表示して楽しむ、白を基調としたミニマルなオーディオプレイヤーサイト。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
