@@ -6,6 +6,14 @@ import { AudioPlayerControls } from './components/AudioPlayerControls';
 import { LyricsDisplay } from './components/LyricsDisplay';
 import { AudioSourceSelector } from './components/AudioSourceSelector';
 import { AudioVisualizer } from './components/AudioVisualizer';
+import {
+  ALLOWED_PLAYBACK_RATES,
+  clampNumber,
+  isSafeAudioSrc,
+  sanitizeFileName,
+} from './utils/security';
+
+const DEFAULT_AUDIO_SRC = '/audio/song.mp3';
 
 export default function App() {
   const [showInitialModal, setShowInitialModal] = useState(true);
@@ -19,18 +27,32 @@ export default function App() {
   const [speechAssistEnabled, setSpeechAssistEnabled] = useState(false);
   
   // Audio source state
-  const [audioSrc, setAudioSrc] = useState<string>('/audio/song.mp3');
+  const [audioSrc, setAudioSrc] = useState<string>(DEFAULT_AUDIO_SRC);
   const [currentSourceTitle, setCurrentSourceTitle] = useState<string>(SONG_METADATA.title);
   const [isCustomAudio, setIsCustomAudio] = useState(false);
   const [activeSection, setActiveSection] = useState('player');
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastSpokenLineRef = useRef<number | null>(null);
+  const activeBlobUrlRef = useRef<string | null>(null);
+
+  // Cleanup any active blob URL and speech synthesis on unmount
+  useEffect(() => {
+    return () => {
+      if (activeBlobUrlRef.current) {
+        URL.revokeObjectURL(activeBlobUrlRef.current);
+        activeBlobUrlRef.current = null;
+      }
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
 
   // Initialize audio properties
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.volume = volume;
+      audioRef.current.volume = clampNumber(volume, 0, 1, 0.85);
       audioRef.current.playbackRate = playbackRate;
       audioRef.current.loop = isLooping;
     }
@@ -64,9 +86,9 @@ export default function App() {
       lastSpokenLineRef.current = currentLine.id;
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(currentLine.text);
+        const utterance = new SpeechSynthesisUtterance(currentLine.text.slice(0, 200));
         utterance.lang = 'ja-JP';
-        utterance.rate = playbackRate * 1.05;
+        utterance.rate = clampNumber(playbackRate * 1.05, 0.5, 2.0, 1.0);
         utterance.pitch = 1.1;
         window.speechSynthesis.speak(utterance);
       }
@@ -81,7 +103,7 @@ export default function App() {
   };
 
   const handleLoadedMetadata = () => {
-    if (audioRef.current && !isNaN(audioRef.current.duration)) {
+    if (audioRef.current && Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0) {
       setDuration(audioRef.current.duration);
     }
   };
@@ -95,9 +117,11 @@ export default function App() {
   };
 
   const handleSeek = (time: number) => {
+    const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : SONG_METADATA.duration;
+    const clampedTime = clampNumber(time, 0, safeDuration, 0);
     if (audioRef.current) {
-      audioRef.current.currentTime = time;
-      setCurrentTime(time);
+      audioRef.current.currentTime = clampedTime;
+      setCurrentTime(clampedTime);
       lastSpokenLineRef.current = null;
       if (speechAssistEnabled && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -107,17 +131,19 @@ export default function App() {
 
   const handleSkipTime = (seconds: number) => {
     if (audioRef.current) {
-      const newTime = Math.max(0, Math.min(duration, audioRef.current.currentTime + seconds));
+      const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : SONG_METADATA.duration;
+      const newTime = clampNumber(audioRef.current.currentTime + seconds, 0, safeDuration, 0);
       handleSeek(newTime);
     }
   };
 
   const handleVolumeChange = (vol: number) => {
-    setVolume(vol);
+    const clampedVol = clampNumber(vol, 0, 1, 0.85);
+    setVolume(clampedVol);
     if (audioRef.current) {
-      audioRef.current.volume = vol;
+      audioRef.current.volume = clampedVol;
     }
-    if (isMuted && vol > 0) {
+    if (isMuted && clampedVol > 0) {
       setIsMuted(false);
     }
   };
@@ -135,9 +161,10 @@ export default function App() {
   };
 
   const handleChangePlaybackRate = (rate: number) => {
-    setPlaybackRate(rate);
+    const safeRate = (ALLOWED_PLAYBACK_RATES as readonly number[]).includes(rate) ? rate : 1.0;
+    setPlaybackRate(safeRate);
     if (audioRef.current) {
-      audioRef.current.playbackRate = rate;
+      audioRef.current.playbackRate = safeRate;
     }
   };
 
@@ -151,10 +178,18 @@ export default function App() {
     });
   };
 
-  // Switch to custom uploaded audio file
-  const handleCustomAudioLoaded = (file: File, url: string) => {
+  // Switch to custom uploaded audio file safely
+  const handleCustomAudioLoaded = (sanitizedName: string, url: string) => {
+    if (!isSafeAudioSrc(url)) {
+      return;
+    }
+    if (activeBlobUrlRef.current && activeBlobUrlRef.current !== url) {
+      URL.revokeObjectURL(activeBlobUrlRef.current);
+    }
+    activeBlobUrlRef.current = url;
+
     setAudioSrc(url);
-    setCurrentSourceTitle(file.name);
+    setCurrentSourceTitle(sanitizeFileName(sanitizedName));
     setIsCustomAudio(true);
     setCurrentTime(0);
     lastSpokenLineRef.current = null;
@@ -165,9 +200,13 @@ export default function App() {
     }, 150);
   };
 
-  // Revert back to built-in audio
+  // Revert back to built-in audio and revoke previous blob URL
   const handleSelectDefaultAudio = () => {
-    setAudioSrc('/audio/song.mp3');
+    if (activeBlobUrlRef.current) {
+      URL.revokeObjectURL(activeBlobUrlRef.current);
+      activeBlobUrlRef.current = null;
+    }
+    setAudioSrc(DEFAULT_AUDIO_SRC);
     setCurrentSourceTitle(SONG_METADATA.title);
     setIsCustomAudio(false);
     setCurrentTime(0);
@@ -228,7 +267,7 @@ export default function App() {
       {/* Hidden HTML5 Audio Element */}
       <audio
         ref={audioRef}
-        src={audioSrc}
+        src={isSafeAudioSrc(audioSrc) ? audioSrc : DEFAULT_AUDIO_SRC}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onEnded={handleAudioEnded}

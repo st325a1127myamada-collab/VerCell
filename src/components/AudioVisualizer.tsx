@@ -52,6 +52,9 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ isPlaying, aud
     el.addEventListener('play', handleFirstPlay);
     return () => {
       el.removeEventListener('play', handleFirstPlay);
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        void audioContextRef.current.close().catch(() => {});
+      }
     };
   }, [audioRef]);
 

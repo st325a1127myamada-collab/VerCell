@@ -1,0 +1,44 @@
+name: Strix Security Scan
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  strix-scan:
+    name: Run Strix Penetration & Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Strix CLI (usestrix/strix)
+        run: |
+          pip install --upgrade pip
+          pip install strix-agent
+
+      - name: Run Strix Security Assessment
+        env:
+          STRIX_LLM: ${{ secrets.STRIX_LLM }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if [ -z "$LLM_API_KEY" ]; then
+            echo "LLM_API_KEY secret is not configured. Skipping live Strix agent run."
+            exit 0
+          fi
+          strix --target . --scan-mode standard --non-interactive
